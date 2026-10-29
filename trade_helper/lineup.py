@@ -15,8 +15,8 @@ class LineupModel:
         self.dedicated = [p for p in roster_positions if p in SKILL_POSITIONS]
         self.flex = [FLEX_ELIGIBLE[p] for p in roster_positions if p in FLEX_ELIGIBLE]
         self.bench_weights = bench_weights
-        # Free agents a team could claim into an open roster spot, best projection first
-        # within each position.
+        # Free agents a team could claim into an open roster spot (a hint only, never scored),
+        # best projection first within each position.
         self.waiver_pool = sorted(waiver_pool, key=lambda p: p.week_pts, reverse=True)
         # How many players a team typically rosters at each position (starters + backups).
         # Backups up to this count earn bench_weights; anyone beyond it earns surplus_weight.
@@ -70,11 +70,10 @@ class LineupModel:
         """Fit a roster to its active capacity, then score it.
 
         Over capacity: cut whichever active player costs the least score (e.g. a surplus 3rd TE
-        before a 5th RB). Under capacity: fill each open spot with the waiver-pool player that
-        raises the score most among the top-projected free agent at each position, so the
-        position is chosen by roster need (open starting or depth slots).
+        before a 5th RB). Under capacity: the spots stay open and add nothing. A free agent is
+        there for the taking with or without a trade, so a trade doesn't get credit for one.
         Players whose pid is in `reserve` sit on IR and don't use an active spot.
-        Returns (score, claims, cuts, final_roster).
+        Returns (score, cuts, open_spots, final_roster).
         """
         roster = list(players)
         open_spots = capacity - sum(1 for p in roster if p.pid not in reserve)
@@ -84,23 +83,16 @@ class LineupModel:
             cut = max(active, key=lambda c: self.score([p for p in roster if p.pid != c.pid]))
             roster = [p for p in roster if p.pid != cut.pid]
             cuts.append(cut)
-        best = self.score(roster)
-        claims = []
-        for _ in range(max(open_spots, 0)):
-            taken = {p.pid for p in roster}
-            # One candidate per position: the highest-projected free agent this week. The team
-            # claims at whichever position helps its roster most (its biggest need).
-            candidates = {}
-            for fa in self.waiver_pool:
-                if fa.pid not in taken and fa.pos not in candidates:
-                    candidates[fa.pos] = fa
-            pick = None
-            for fa in candidates.values():
-                s = self.score(roster + [fa])
-                if s > best:
-                    pick, best = fa, s
-            if pick is None:
-                break
-            roster.append(pick)
-            claims.append(pick)
-        return best, claims, cuts, roster
+        return self.score(roster), cuts, max(open_spots, 0), roster
+
+    def best_claim(self, roster):
+        """Free agent who would help this roster most, shown as a hint for an open spot: the
+        top-projected free agent at each position, picked by roster need."""
+        taken = {p.pid for p in roster}
+        candidates = {}
+        for fa in self.waiver_pool:
+            if fa.pid not in taken and fa.pos not in candidates:
+                candidates[fa.pos] = fa
+        base = self.score(roster)
+        best = max(candidates.values(), key=lambda fa: self.score(roster + [fa]), default=None)
+        return best if best and self.score(roster + [best]) > base else None

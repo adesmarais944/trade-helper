@@ -17,6 +17,7 @@ for stream in (sys.stdout, sys.stderr):  # team names can contain non-Latin char
         stream.reconfigure(encoding="utf-8", errors="replace")
 console = Console()
 TRADE_COMMANDS = {"partners", "target", "shop", "evaluate"}
+OUT_STATUSES = {"IR", "Out", "PUP", "Sus"}    # shown in red
 
 
 # ---------- formatting ----------
@@ -33,14 +34,25 @@ def tags(p):
         t += "R"
     extra = []
     if p.injury:
-        extra.append(p.injury)
+        extra.append(f"[red]{p.injury}[/red]" if out(p) else p.injury)
+    elif out(p):
+        extra.append("[red]IR slot[/red]")
     if p.byes:
         extra.append("bye " + ",".join(map(str, p.byes)))
     return t + (f" [dim]({'; '.join(extra)})[/dim]" if extra else "")
 
 
+def out(p):
+    """Not playing: ruled out, on IR (status or the team's IR slot), PUP or suspended."""
+    return p.injury in OUT_STATUSES or bool(p.owner and p.pid in p.owner.reserve)
+
+
+def name(p):
+    return f"[red]{p.name}[/red]" if out(p) else p.name
+
+
 def fmt_player(p):
-    return f"{p.name} [dim]{p.pos}[/dim] {p.value:,.0f}{tags(p)}"
+    return f"{name(p)} [dim]{p.pos}[/dim] {p.value:,.0f}{tags(p)}"
 
 
 def fmt_side(players):
@@ -70,11 +82,14 @@ def header(league):
 
 
 def roster_moves(t):
-    """Waiver claims / cuts the trade forces, e.g. 'They claim Tyler Allgeier RB'."""
+    """Cuts and open roster spots the trade forces, e.g. 'They: 1 open spot (best FA: ...)'."""
     lines = []
-    for who, claims, cuts in (("You", t.my_claims, t.my_cuts), ("They", t.their_claims, t.their_cuts)):
-        lines += [f"{who} claim {p.name} [dim]{p.pos} {p.value:,.0f}[/dim]" for p in claims]
+    for who, cuts, open_spots, fa in (("You", t.my_cuts, t.my_open, t.my_fa),
+                                      ("They", t.their_cuts, t.their_open, t.their_fa)):
         lines += [f"{who} cut {p.name} [dim]{p.pos} {p.value:,.0f}[/dim]" for p in cuts]
+        if open_spots:
+            hint = f" [dim](best FA: {fa.name} {fa.pos})[/dim]" if fa else ""
+            lines.append(f"{who}: {open_spots} open spot{'s' if open_spots > 1 else ''}{hint}")
     return "\n".join(lines) or "[dim]-[/dim]"
 
 
@@ -237,7 +252,7 @@ def cmd_values(league, engine, cfg, args):
     for col in (f"Proj wk {league.short_weeks[0]}-{league.short_weeks[-1]}", "Market", "Scoring", "Value"):
         table.add_column(col, justify="right")
     for p in pool:
-        table.add_row(f"{p.name} {tags(p)}", p.pos, p.nfl_team, p.owner.name if p.owner else "[dim]FA[/dim]",
+        table.add_row(f"{name(p)} {tags(p)}", p.pos, p.nfl_team, p.owner.name if p.owner else "[dim]FA[/dim]",
                       f"{p.short_pts:.1f}", f"{p.market_value:,.0f}", f"x{p.scoring_factor:.2f}",
                       f"[bold]{p.value:,.0f}[/bold]")
     console.print(table)

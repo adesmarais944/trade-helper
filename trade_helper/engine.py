@@ -19,11 +19,14 @@ class Trade:
     their_gain: float
     score: float
     kind: str = ""         # "win-win", "fair", "tough sell" or "hurts you"
-    # Roster moves the trade forces (beyond what each team would do anyway).
-    my_claims: list = field(default_factory=list)
+    # Roster moves the trade forces: cuts, and new open spots (worth nothing in the gains;
+    # *_fa is the free agent who would help most there, as a hint).
     my_cuts: list = field(default_factory=list)
-    their_claims: list = field(default_factory=list)
     their_cuts: list = field(default_factory=list)
+    my_open: int = 0
+    their_open: int = 0
+    my_fa: object = None
+    their_fa: object = None
     # Weak positions each side fills with an incoming player who starts for them.
     my_fills: set = field(default_factory=set)
     their_fills: set = field(default_factory=set)
@@ -59,11 +62,11 @@ class TradeEngine:
         self.package_weights = cfg["package_weights"]
         strength = position_strength(league)
         self.weak = {t.roster_id: needs(strength, t)[0] for t in league.teams}
-        self.base, self.base_claims = {}, {}
+        self.base, self.base_open = {}, {}
         for t in league.teams:
-            score, claims, _, _ = self.model.settle(t.players, t.capacity, t.reserve)
+            score, _, open_spots, _ = self.model.settle(t.players, t.capacity, t.reserve)
             self.base[t.roster_id] = score
-            self.base_claims[t.roster_id] = {p.pid for p in claims}
+            self.base_open[t.roster_id] = open_spots
 
     def package_value(self, players):
         ranked = sorted((p.value for p in players), reverse=True)
@@ -78,9 +81,9 @@ class TradeEngine:
             if p.pid in sender.reserve and len(reserve) < team.ir_slots:
                 reserve = reserve | {p.pid}
         roster = [p for p in team.players if p.pid not in out_ids] + list(incoming)
-        score, claims, cuts, final = self.model.settle(roster, team.capacity, reserve)
-        new_claims = [p for p in claims if p.pid not in self.base_claims[team.roster_id]]
-        return score - self.base[team.roster_id], new_claims, cuts, final
+        score, cuts, open_spots, final = self.model.settle(roster, team.capacity, reserve)
+        new_open = max(open_spots - self.base_open[team.roster_id], 0)
+        return score - self.base[team.roster_id], cuts, new_open, final
 
     def _fills(self, team, incoming, roster):
         """Weak positions of `team` that an incoming player fills as a starter."""
@@ -89,15 +92,17 @@ class TradeEngine:
         return {p.pos for p in incoming if p.pid in starting and p.pos in self.weak[team.roster_id]}
 
     def evaluate(self, partner, give, get):
-        my_gain, my_claims, my_cuts, my_roster = self._after(self.me, give, get, partner)
-        their_gain, their_claims, their_cuts, their_roster = self._after(partner, get, give, self.me)
+        my_gain, my_cuts, my_open, my_roster = self._after(self.me, give, get, partner)
+        their_gain, their_cuts, their_open, their_roster = self._after(partner, get, give, self.me)
         t = Trade(partner, tuple(give), tuple(get), self.package_value(give), self.package_value(get),
                   my_gain, their_gain, 0.0,
-                  my_claims=my_claims, my_cuts=my_cuts, their_claims=their_claims, their_cuts=their_cuts)
+                  my_cuts=my_cuts, their_cuts=their_cuts, my_open=my_open, their_open=their_open)
         t.kind = self.classify(t)
         if my_gain >= self.min_gain:  # only worth computing for trades that can be shown
             t.my_fills = self._fills(self.me, get, my_roster)
             t.their_fills = self._fills(partner, give, their_roster)
+            t.my_fa = self.model.best_claim(my_roster) if my_open else None
+            t.their_fa = self.model.best_claim(their_roster) if their_open else None
         # Balanced ranking: the smaller of the two gains, boosted when the trade fills a weak
         # starting spot for one or both sides.
         sides_filled = bool(t.my_fills) + bool(t.their_fills)

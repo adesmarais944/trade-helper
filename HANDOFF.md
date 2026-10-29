@@ -23,7 +23,7 @@ suggests trades. Offers are made by hand in the Sleeper app.
 | Trade deadline | After the deadline the tool is useless, so trade commands refuse to run (`--force` overrides). |
 | Untouchables | None. Elite players get a `*` tag instead (top 12 by value). |
 | Trade shapes | Up to 3-for-3 allowed by default (`trade_shapes`). Results ranked top N by score, no per-shape quotas. |
-| Uneven trades | The side receiving fewer players claims a free agent: the top projected free agent this week at the position it needs most (claim assumed to succeed, no discount). The side receiving more cuts whoever costs it least. |
+| Uneven trades (revised 2026-10-28) | The side receiving fewer players gets an **open spot worth 0**; the best free agent is shown as a hint only. Free-agent claims used to count toward gain, but a team can make that pickup without any trade (e.g. drop Ja'Kobi Lane for Brenton Strange). Claims were in 18 of 21 suggestions (Strange in 11), worth up to +179, and some trades were win-win only because of them. The side receiving more cuts whoever costs it least (a real cost, still counted). User priority: keep it simple and useful. |
 | Positional scarcity | RB/WR depth matters more (2+ starters); TE rarely plays FLEX; a backup QB has value because this league rosters about 2 QBs per team even though it starts 1. Modeled with league-derived depth targets, not flat position multipliers. |
 | Trade goal | **Balanced**: "your gain" and "their gain" should be as even as possible, and each side should fill its needs from the other's strengths. Suggestions that heavily favor the user are *not* the goal. |
 | Ranking | Rank by the smaller of the two gains (maximin). `partners`/`shop` show win-win only. Need-fit is a ranking bonus plus a display, not a hard requirement. Value-gap tolerance 10%. |
@@ -68,7 +68,7 @@ trade_helper/
                        (an old single-league file still works); resolves relative paths
   sleeper.py           Cache (JSON on disk in .cache/, stale fallback if offline) + SleeperClient
   league.py            load_league(): fetch, value players, build Team/Player/League objects
-  lineup.py            LineupModel: best legal lineup + position-aware depth, waiver claims/cuts
+  lineup.py            LineupModel: best legal lineup + position-aware depth, cuts, free-agent hint
   engine.py            TradeEngine: package enumeration, fairness, gains, classify, partners
   cli.py               argparse commands + rich output
 .claude/skills/trade-helper/SKILL.md   skill that runs the CLI and explains the results
@@ -106,7 +106,7 @@ All values are on the FantasyCalc scale (top player about 10,000).
    marks a rookie. Injury status and byes in that window are shown too. None of this
    affects value.
 
-`week_pts` (this week's projection, league scoring) still picks waiver claims.
+`week_pts` (this week's projection, league scoring) still ranks the free-agent hint.
 
 K and DEF are excluded from valuation and trades. They still take roster spots.
 
@@ -125,14 +125,14 @@ K and DEF are excluded from valuation and trades. They still take roster spots.
   (`len(roster_positions)`) minus K/DEF. IR players (`roster.reserve`) don't count. An
   incoming IR player stays on IR if the receiver has a free IR slot.
   - Over capacity: repeatedly cut the active player whose removal costs the least score.
-  - Under capacity: claim free agents, one per open spot, from the `waiver_pool`. The pool
-    holds the top `waiver_candidates` (5) per position by this week's projection, excluding
-    players who are IR, Out, PUP, Sus, NA or Doubtful. For each spot, the candidates are the
-    *highest-projected* untaken free agent at each position. The team claims whichever one
-    raises its score most, so the position is chosen by need and the player by projection.
-  - The baseline (no trade) is settled the same way, so only claims the trade *causes* count
-    toward gain. `Trade.my_claims`/`my_cuts`/`their_claims`/`their_cuts` hold the moves; the
-    CLI shows them in the "Roster moves" column.
+  - Under capacity: the spots stay open and score 0 (since 2026-10-28, see User decisions).
+    `Trade.my_open`/`their_open` count open spots the trade creates beyond the baseline.
+    `LineupModel.best_claim()` names a hint (`my_fa`/`their_fa`): from the `waiver_pool`
+    (top `waiver_candidates` (5) per position by this week's projection, excluding IR, Out,
+    PUP, Sus, NA, Doubtful), the top-projected free agent at each position, picked by which
+    raises the score most.
+  - `Trade.my_cuts`/`their_cuts` hold forced cuts. The CLI shows cuts and open spots in the
+    "Roster moves" column.
 - **Gain** = team score after the trade minus the score before, for each side.
 - **Package value** = values sorted from highest, multiplied by `package_weights`
   [1, .8, .65, .5]. This is the consolidation discount.
@@ -165,7 +165,8 @@ K and DEF are excluded from valuation and trades. They still take roster spots.
 zero-sum. Win-win only happens when a player moves from one team's bench into the other's
 starting lineup, or through consolidation plus a waiver claim. The first version (1-for-1 to
 2-for-2, no waiver model) found just 1 win-win partner, so a "fair" tier was added. Once
-uneven shapes and waiver claims existed, win-win trades became plentiful. Then the user
+uneven shapes and waiver claims existed, win-win trades became plentiful (partly from free
+claims, removed 2026-10-28; 21 win-win trades across 7 partners remain without them). Then the user
 tested as `thisisjen` and found results heavily favoring the user (old score
 `my_gain + 0.5 * their_gain`, e.g. +1,393 / +334). That led to the balanced ranking and to
 win-win only in `partners`/`shop`.
@@ -246,9 +247,8 @@ replacement and the top-12 stars didn't move.
 - **Platforms:** only Sleeper. ESPN is a config placeholder (see Architecture).
 - **Lineup rules:** IR placement follows Sleeper's current `reserve` list. There's no check
   that an incoming injured player is actually IR-eligible.
-- **Waivers:** claims are assumed to succeed (waiver priority and FAAB are ignored). Each
-  side's claims are computed separately, so in rare cases both sides of one trade could
-  "claim" the same free agent.
+- **Open spots:** worth 0, which slightly undervalues the side that receives fewer players
+  (an open spot has some real value when the free agents are decent).
 - **Player models:** opponent managers are assumed to value players the same way the tool
   does. Strength of schedule and playoff weeks (15–17) are not weighted.
 - **Player names:** lookup uses exact match, then substring, then fuzzy matching. A name

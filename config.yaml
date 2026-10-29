@@ -50,9 +50,10 @@ trades_per_partner: 3
 # Top-N players by value get a * (elite / hard to pry loose).
 star_count: 12
 
-# Uneven trades: the side with fewer players claims free agents into open roster spots
-# (chosen from the top N per position by this week's projection, by roster need); the side
-# with more players cuts its lowest-value players.
+# Uneven trades: the side with more players cuts its lowest-value players; the side with
+# fewer gets open roster spots, worth 0 (a free agent is available with or without the
+# trade). The best free agent for the spot is shown as a hint, chosen from the top N per
+# position by this week's projection.
 waiver_candidates: 5
 
 # --- Positional depth ---

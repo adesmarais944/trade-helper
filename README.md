@@ -109,7 +109,8 @@ trade deadline, trade commands stop.
 
 Flags: `*` top-12 star, `^` value well above the next `short_term_weeks` of projections
 (bye, injury or slow start: possible buy-low), `!` projected well above value (hot streak:
-possible sell-high), `R` rookie. Flags are labels only.
+possible sell-high), `R` rookie. Flags are labels only. Players who aren't playing (Out, IR,
+PUP, suspended, or in a team's IR slot) are shown in red.
 
 ## How trades are scored
 
@@ -127,10 +128,9 @@ trade's **gain** is the change in that score for each side.
 Trades can be any shape in `trade_shapes` (default: 1-for-1 up to 3-for-3). In uneven trades
 the roster has to balance out, and the **Roster moves** column shows how:
 
-- The team that receives fewer players **claims a free agent** for each open spot: the
-  highest-projected free agent this week at the position it needs most. For example, a team
-  with 1 QB claims a backup QB. This assumes the claim succeeds; waiver priority can block
-  it in real life.
+- The team that receives fewer players gets an **open roster spot**, which counts as 0. A
+  free agent is available with or without the trade, so picking one up isn't credited to the
+  trade. The column names the free agent who would help most there, as a hint.
 - The team that receives more players **cuts** whoever costs its roster the least (a
   surplus 3rd TE before a 5th RB). Cutting deep bench costs almost nothing.
 

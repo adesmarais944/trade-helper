@@ -32,9 +32,9 @@ Set `COLUMNS=180` in the environment so tables don't wrap.
   "you fill RB / they fill WR" mean an incoming player starts at that team's weak position.
 - The goal is trades that help both sides about equally. Don't push the user toward the
   most lopsided option.
-- **Roster moves**: in uneven trades, the side receiving fewer players claims the top
-  projected free agent at its neediest position, and the side receiving more cuts whoever it
-  can spare. Mention these, and note that a claim depends on waiver priority.
+- **Roster moves**: in uneven trades, the side receiving more players cuts whoever it can
+  spare, and the side receiving fewer gets an open spot. Open spots add nothing to the gains;
+  the "best FA" next to one is only a suggestion.
 - Depth is position-aware: a backup QB has value (this league rosters about 2), RB/WR depth
   matters most, and a 3rd TE is nearly worthless.
 - Values come from FantasyCalc (rest of season) and the user's `overrides.csv`, adjusted by
