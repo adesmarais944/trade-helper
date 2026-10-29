@@ -17,8 +17,9 @@ suggests trades. Offers are made by hand in the Sleeper app.
 | League type | **Redraft**, half PPR. No dynasty, keeper or contend/rebuild logic. |
 | Language / output | Python, terminal output (`rich` tables). |
 | Interface | Python CLI is the core. A thin Claude skill wraps it. |
-| Scope | One league for now (config holds a single `league_id`). |
-| Short vs. long term | Sliding weight: `now_weight = current_week / 17`. Week 7 is 41% now. It must shift on its own as the season goes on. |
+| Scope | Several leagues (2026-10-28): config has a `leagues:` map, `league:` picks the default, `--league NAME` overrides. Only `platform: sleeper` works; the user plans an ESPN league (full PPR, 4-pt passing TD) later. |
+| Value model (2026-10-28, replaces the now/ROS blend) | **Value = FantasyCalc ROS value (or override) × per-player scoring factor.** The old blend (`w = week/17` of a 3-week projection value) over-penalized byes (Nico Collins −31% for one bye) and made values hard to explain. FC is real trade-market data, which also fits the assumption that opponents value players the way the tool does. |
+| Scoring formats | PPR: fetch FC at the league's PPR (0/0.5/1). Everything else (6-pt pass TD, TE premium): per-player factor = ROS projected points under league scoring / under FC's assumed scoring, capped 0.75–1.35. Per player, not per position, so pocket passers gain more than rushing QBs. |
 | Trade deadline | After the deadline the tool is useless, so trade commands refuse to run (`--force` overrides). |
 | Untouchables | None. Elite players get a `*` tag instead (top 12 by value). |
 | Trade shapes | Up to 3-for-3 allowed by default (`trade_shapes`). Results ranked top N by score, no per-shape quotas. |
@@ -27,9 +28,8 @@ suggests trades. Offers are made by hand in the Sleeper app.
 | Trade goal | **Balanced**: "your gain" and "their gain" should be as even as possible, and each side should fill its needs from the other's strengths. Suggestions that heavily favor the user are *not* the goal. |
 | Ranking | Rank by the smaller of the two gains (maximin). `partners`/`shop` show win-win only. Need-fit is a ranking bonus plus a display, not a hard requirement. Value-gap tolerance 10%. |
 | Value sources | The user suggested peakedinhighskool's half-PPR trade chart and asked for additional sources to build a fuller value set. |
-| Byes / injuries (2026-10-28) | Should lower value, mostly for the week they happen. Done through the short-term value only, never a flat penalty on top (Sleeper projections and FantasyCalc already price injuries, so a flat penalty would double count). Nearer weeks weigh more: `short_term_week_weights` [1.0, 0.7, 0.5]. |
-| Injury status factors | This week only: Out 0%, Doubtful 0%, Questionable 85%. Questionable counts only when it is a real game-time decision: the user chose "option A", using the final injury report (game day − 2 days, − 1 for Thursday games) instead of tracking practice reports, so midweek veteran rest days are ignored. |
-| Below-replacement values | Taper gradually instead of dropping to 0 (user request). |
+| Byes / injuries (revised 2026-10-28) | **Display only**: tags next to the player, no effect on value. FC already prices injuries over the rest of the season. The earlier week weights, status factors and Questionable timing rule were removed. |
+| Below-replacement values | Taper gradually instead of dropping to 0 (user request). Still used for the projection fallback and the `^`/`!` flags. |
 | Lineup impact of a trade this week | Deferred. Idea: `evaluate`/suggestions show each side's this-week lineup change (e.g. "−14 pts wk 8, McCaffrey on bye"), as a warning only. User said "not in scope right now". |
 
 ## League facts (as of 2026-10-22, NFL week 7)
@@ -48,24 +48,24 @@ suggests trades. Offers are made by hand in the Sleeper app.
 |---|---|---|---|
 | Sleeper | `api.sleeper.app/v1/league/{id}`, `/users`, `/rosters`, `/state/nfl` | League, rosters, current week | No auth needed. Cached 15 min. |
 | Sleeper | `api.sleeper.app/v1/players/nfl` | Player database (~5 MB) | Sleeper asks for at most 1 fetch/day. Cached 24 h. |
-| Sleeper (undocumented) | `api.sleeper.app/projections/nfl/{season}/{week}?season_type=regular&position[]=QB...` | Weekly stat projections | Bye-week teams still get rows, but with `opponent: None` (fixed 2026-10-28; the old "team has no rows" check found no byes at all). OUT players project 0 for the current week, IR players 0 for every week. Each row's `date` is the game date. Re-scored with league `scoring_settings`; falls back to `pts_half_ppr`. |
-| FantasyCalc | `api.fantasycalc.com/values/current?isDynasty=false&numQbs=1&numTeams=12&ppr=0.5` | Rest-of-season market value | Keyed by `sleeperId`. About 196 players. |
+| Sleeper (undocumented) | `api.sleeper.app/projections/nfl/{season}/{week}?season_type=regular&position[]=QB...` | Weekly stat projections | Bye-week teams still get rows, but with `opponent: None` (fixed 2026-10-28; the old "team has no rows" check found no byes at all). OUT players project 0 for the current week, IR players 0 for every week. Each row's `date` is the game date. Scored with league scoring (and with FC's assumed scoring, for the factor); falls back to `pts_std`/`pts_half_ppr`/`pts_ppr` by PPR. League-independent, so usable for ESPN leagues too. |
+| FantasyCalc | `api.fantasycalc.com/values/current?isDynasty=false&numQbs=1&numTeams=12&ppr=0.5` | Rest-of-season market value | Keyed by `sleeperId`. About 196 players. `ppr` accepts 0, 0.5, 1; values barely change between them for most players. |
 | peakedinhighskool | Website chart | Not used automatically | The chart is **images**, so it can't be parsed. The user can type values into `overrides.csv` by hand. |
 
 KeepTradeCut was considered and rejected: it has no API, and scraping breaks easily.
 
 Sleeper's player database has no injury history. `practice_participation`,
 `practice_description` and `injury_start_date` exist but are almost never filled (1, 1 and 0
-players as of 2026-10-28). That's why Questionable uses the final-report timing rule rather
-than "Questionable on multiple practice days".
+players as of 2026-10-28).
 
 ## Architecture
 
 ```
-config.yaml            all settings (league id, username, thresholds, cache TTLs)
+config.yaml            leagues (platform, id, username, scoring) + global settings
 overrides.csv          optional manual ROS values: player,value
 trade_helper/
-  config.py            loads YAML + defaults; resolves paths relative to the config file
+  config.py            loads YAML + defaults, merges globals with the chosen league's entry
+                       (an old single-league file still works); resolves relative paths
   sleeper.py           Cache (JSON on disk in .cache/, stale fallback if offline) + SleeperClient
   league.py            load_league(): fetch, value players, build Team/Player/League objects
   lineup.py            LineupModel: best legal lineup + position-aware depth, waiver claims/cuts
@@ -75,34 +75,38 @@ trade_helper/
 ```
 
 Run with `python -m trade_helper <command>`. Commands: `partners`, `target`, `shop`, `evaluate`,
-`report`, `values`. Global flags: `--refresh`, `--force`, `--config`. Python 3.13 on Windows.
+`report`, `values`. Global flags: `--league`, `--refresh`, `--force`, `--config`. Python 3.13 on Windows.
+
+**Adding a platform (ESPN):** `load_league()` reads Sleeper directly. An ESPN adapter needs to
+supply rosters, users, roster positions, current week, trade deadline and a scoring dict in
+Sleeper stat names (config `scoring` is merged on top). FantasyCalc and Sleeper projections
+are keyed by Sleeper player id, so ESPN players must be mapped to Sleeper ids (by name +
+position + team). Then add the platform to `config.PLATFORMS`.
 Dependencies are in `requirements.txt` and already installed.
 
 ## Value model (`league.py`)
 
 All values are on the FantasyCalc scale (top player about 10,000).
 
-1. **short_value ("Now")**: projected points over the next `short_term_weeks` (3), scored
-   with league settings, with byes counting 0.
-   - Each week is weighted by `short_term_week_weights` ([1.0, 0.7, 0.5]; weeks past the
-     list use the last weight). `Player.short_pts` stays the plain sum for display; the
-     weighted sum (`short_score`) drives the value.
-   - The current week's points (also `week_pts` and `ros_pts`) are multiplied by
-     `_status_factor()`, using `status_factors` from the config. Questionable applies only
-     once `today >= game date − 2 days` (− 1 for Thursday games).
-   - The weighted points are converted to value over replacement (the replacement level
-     comes from simulating every team filling its starting slots, including FLEX). Every
-     player with positive points is ranked by that and mapped onto the FantasyCalc value
-     curve by rank, including players below replacement (the curve tapers to ~1). Before
-     2026-10-28 only players above replacement were ranked, so value fell from ~1,050 to 0
-     at about rank 85.
-2. **long_value ("ROS")**: in priority order, the override from `overrides.csv`, then the
-   FantasyCalc value, then a rest-of-season projection value mapped the same way but capped
-   at FantasyCalc's lowest value.
-3. **value** = `w * short + (1 - w) * long`, with `w = week / final_week`.
-4. Tags: `*` top `star_count` by value. `^` (upside) when long ≥ 1.35 × short. `!` (win now)
-   when short ≥ 1.35 × long. Both flags need a value of at least 1500. `R` marks a rookie.
-   Injury status and upcoming byes are shown too.
+1. **Scoring**: league `scoring_settings` with config `scoring` merged on top. `fc_ppr` is the
+   league's `rec` rounded to 0 / 0.5 / 1. `fc_scoring` = league scoring with `FC_SCORING`
+   (`pass_td` 4, `bonus_rec_te` 0) and `rec = fc_ppr`. `League.scoring_changes` lists the
+   differences and the header prints them.
+2. **market_value**: the override from `overrides.csv`, else the FantasyCalc value (fetched at
+   `fc_ppr`), else (not on FC's list) a rest-of-season projection value: value over
+   replacement, mapped onto FC's value curve by rank (`_rank_to_curve`, tapering below
+   replacement), capped at FC's lowest value.
+3. **scoring_factor** (`_scoring_factor`): ROS projected points under league scoring /
+   under `fc_scoring`, capped to `FACTOR_LIMITS` (0.75–1.35); 1.0 under `FACTOR_MIN_PTS`
+   (20) projected points, and for projection-fallback players (already in league scoring).
+4. **value** = `market_value * scoring_factor`.
+5. Tags: `*` top `star_count` by value. `proj_value` = the next `short_term_weeks` (3) of
+   projected points (byes count 0), mapped to the FC curve like the fallback. `^` when
+   value ≥ 1.35 × proj_value, `!` when proj_value ≥ 1.35 × value; both need ≥ 1500. `R`
+   marks a rookie. Injury status and byes in that window are shown too. None of this
+   affects value.
+
+`week_pts` (this week's projection, league scoring) still picks waiver claims.
 
 K and DEF are excluded from valuation and trades. They still take roster spots.
 
@@ -192,7 +196,17 @@ trades are also within about 20% of each other (e.g. +207 / +221). The user some
 `my_username: "thisisjen"` in `config.yaml` for testing; their own team is `adamDeez`
 (set back as of 2026-10-28).
 
-## Bye / injury results (2026-10-28, week 8)
+## Simplified value model results (2026-10-28, week 8)
+
+- Nico Collins (bye wk 8): 2,722 under the blend → 3,956 (his FC value), tagged `^`.
+- QB scoring factors at 6-pt passing TD: Goff ×1.22, Burrow ×1.20, Purdy ×1.21, Allen ×1.12,
+  Daniels ×1.11 (rushing QBs gain less). Non-QBs ×1.00.
+- With a test league override `scoring: {rec: 1, pass_td: 4}`, FC is fetched at PPR 1 and
+  every factor is ×1.00.
+- `partners` still about 7.5 s; top trades stay balanced (e.g. +403 / +460, +425 / +394).
+  `adamDeez` now shows as weak at QB and WR.
+
+## Bye / injury results (2026-10-28, week 8; superseded by the simplified model above)
 
 Value before → after the week weights and status factors:
 - Christian McCaffrey (bye wk 8): 6691 → 5620
@@ -222,13 +236,14 @@ replacement and the top-12 stars didn't move.
 
 ## Known limitations
 
-- **Week boundary:** the "now" window includes the current week, even if it's partly played
-  (Thursday games).
-- **Injury status:** only the current status is known. A Questionable player whose game
-  already happened this week still gets the 85% factor. Multi-week injuries beyond this week
-  rely on Sleeper's projections and FantasyCalc.
+- **Byes / injuries:** don't affect value at all; a player Out for the next 2 weeks keeps his
+  FC value (FC usually lowers it). The `^` flag and the injury tag are the only signal.
 - **Trade-week impact:** a trade's effect on either team's lineup *this week* (byes, Out
-  players) isn't shown; gains use blended values. This is deferred, see User decisions.
+  players) isn't shown. This is deferred, see User decisions.
+- **Scoring factor:** treats value as proportional to points, though value really tracks
+  points over replacement. Only `pass_td` and `bonus_rec_te` are assumed to differ from FC;
+  other unusual settings (e.g. −2 per interception) are treated as matching FC.
+- **Platforms:** only Sleeper. ESPN is a config placeholder (see Architecture).
 - **Lineup rules:** IR placement follows Sleeper's current `reserve` list. There's no check
   that an incoming injured player is actually IR-eligible.
 - **Waivers:** claims are assumed to succeed (waiver priority and FAAB are ignored). Each
@@ -246,14 +261,11 @@ replacement and the top-12 stars didn't move.
 ## Possible next steps (none requested yet)
 
 - This-week lineup impact warning in `evaluate` and suggestions (discussed, deferred).
-- Questionable based on practice reports (DNP / Limited / Full per day), either by saving
-  each run's status (needs daily runs) or from NFL.com/ESPN. Rejected for now in favor of the
-  final-report rule.
+- ESPN platform adapter (user has an ESPN league: full PPR, 4-pt passing TD).
 - Weight playoff schedule (weeks 15–17) more heavily as the season goes on.
 - Add more value sources, such as another public rest-of-season ranking, averaged with
   FantasyCalc.
-- Support multiple leagues (`leagues:` list in the config).
 - Add an HTML report.
-- Add unit tests for `LineupModel`, `classify`, `_replacement_levels`, `_status_factor`
-  (takes a `today` argument for testing).
-- Initialize git (the folder is not a repo yet; the user hasn't asked for it).
+- Add unit tests for `LineupModel`, `classify`, `_replacement_levels`, `_scoring_factor`,
+  `load_config` (league selection, old format).
+- First git commit (repo is initialized on `main`, nothing committed; the user hasn't asked).

@@ -46,8 +46,11 @@ pip install -r requirements.txt
 
 ### 4. Configure
 
-Edit `config.yaml`: set `league_id` (the number in your Sleeper league URL) and
-`my_username` (your Sleeper username or display name).
+Edit `config.yaml`. Under `leagues:`, each league has a name and sets `platform` (only
+`sleeper` for now), `league_id` (the number in your Sleeper league URL) and `my_username`
+(your Sleeper username or display name). `league:` at the top picks the default; use
+`--league NAME` to pick another. Any other setting can go inside a league to override it
+there, including `scoring` (see below).
 
 ### 5. Run
 
@@ -71,8 +74,8 @@ python -m trade_helper report                   # every team's strength by posit
 python -m trade_helper values --mine            # player values (--pos RB, --team NAME)
 ```
 
-Global flags: `--refresh` (ignore cache), `--force` (run after the trade deadline),
-`--config PATH`.
+Global flags: `--league NAME`, `--refresh` (ignore cache), `--force` (run after the trade
+deadline), `--config PATH`.
 
 ## How values work
 
@@ -80,29 +83,33 @@ Where the numbers come from:
 
 | Source | What it provides |
 |---|---|
-| [FantasyCalc](https://www.fantasycalc.com) API | Rest-of-season trade value (12-team, half-PPR, 1-QB redraft) |
-| Sleeper projections (supplied by RotoWire) | Weekly stat projections, re-scored with your league's rules |
+| [FantasyCalc](https://www.fantasycalc.com) API | Rest-of-season trade value, fetched for your league's team count, QB count and PPR (0, 0.5 or 1) |
+| Sleeper projections (supplied by RotoWire) | Weekly stat projections, scored with your league's rules |
 | `overrides.csv` | Your manual values, e.g. from a trade value chart |
 
-Every player gets two values on the FantasyCalc scale (top player ~10,000):
+**Value = market value x scoring factor**, on the FantasyCalc scale (top player ~10,000).
 
-- **Now**: projected points over the next `short_term_weeks`, as value over replacement.
-  - Nearer weeks count more (`short_term_week_weights`: 1.0 / 0.7 / 0.5), so a bye or injury
-    this week costs more than one two weeks out.
-  - Byes count as 0.
-  - This week's projection is scaled by injury status (`status_factors`): Out and Doubtful
-    0%, Questionable 85%. Questionable only counts once the final injury report is out (2
-    days before kickoff, 1 day for Thursday games), so a midweek rest day doesn't count.
-    Later weeks are not affected.
-  - Players below replacement level still get a small, tapering value instead of 0.
-- **ROS**: the FantasyCalc value, or your override from `overrides.csv`.
+- **Market value** is your override from `overrides.csv` if there is one, otherwise the
+  FantasyCalc value. It's what managers actually trade players for, and it already reflects
+  injuries, role changes and byes over the rest of the season.
+- **Scoring factor** adjusts for scoring rules FantasyCalc doesn't know about. FantasyCalc
+  assumes 4-point passing TDs and no TE premium. The factor is the player's projected
+  rest-of-season points under your league's rules divided by his points under FantasyCalc's,
+  capped at 0.75-1.35. With 6-point passing TDs, pocket passers get about x1.2 and rushing
+  QBs about x1.1. Everyone else stays at x1.00. In a league that matches FantasyCalc's rules
+  (e.g. full PPR with 4-point TDs), every factor is 1.00.
+- Players FantasyCalc doesn't list get a small value from their rest-of-season projections,
+  capped below FantasyCalc's lowest value.
 
-**Value = w x Now + (1 - w) x ROS**, where `w = current week / final_week`. Week 7 of 17 is
-41% now. The weight shifts toward "now" as the season goes on. After the league's trade
-deadline, trade commands stop.
+Scoring comes from the Sleeper league automatically. To change a setting, add `scoring:`
+to the league in `config.yaml`, using Sleeper stat names, e.g. `scoring: {rec: 1, pass_td: 4}`.
 
-Flags: `*` top-12 star, `^` ROS value well above current output (breakout/return candidate),
-`!` producing above ROS value (bye-week fill / sell high), `R` rookie.
+Byes and injuries are shown next to each player but don't change value. After the league's
+trade deadline, trade commands stop.
+
+Flags: `*` top-12 star, `^` value well above the next `short_term_weeks` of projections
+(bye, injury or slow start: possible buy-low), `!` projected well above value (hot streak:
+possible sell-high), `R` rookie. Flags are labels only.
 
 ## How trades are scored
 

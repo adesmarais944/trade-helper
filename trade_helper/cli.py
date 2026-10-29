@@ -53,7 +53,6 @@ def signed(v):
 
 
 def header(league):
-    w = league.short_weight
     console.print(f"[bold]{league.name}[/bold] {league.season} - week {league.week}/{league.final_week}"
                   f"  |  you: [bold]{league.me.name}[/bold] ({league.me.record()})")
     if league.trade_deadline:
@@ -63,9 +62,11 @@ def header(league):
         deadline = f"trade deadline week {league.trade_deadline}: {status}"
     else:
         deadline = "no trade deadline"
-    console.print(f"weighting: {w:.0%} now (wks {league.short_weeks[0]}-{league.short_weeks[-1]}) / "
-                  f"{1 - w:.0%} rest of season  |  {deadline}")
-    console.print("[dim]* star  ^ more ROS upside than current output  ! producing above ROS value  R rookie[/dim]\n")
+    adjust = ", ".join(f"{k} {mine:g} (FC {fc:g})" for k, (mine, fc) in league.scoring_changes.items())
+    console.print(f"values: FantasyCalc rest of season ({league.num_teams} teams, {league.fc_ppr:g} PPR)"
+                  f"{', scoring adjusted for ' + adjust if adjust else ''}  |  {deadline}")
+    console.print(f"[dim]* star  ^ value well above projected wks {league.short_weeks[0]}-{league.short_weeks[-1]}"
+                  "  ! projected well above value  R rookie[/dim]\n")
 
 
 def roster_moves(t):
@@ -233,12 +234,11 @@ def cmd_values(league, engine, cfg, args):
     table = Table(title_justify="left")
     for col in ("Player", "Pos", "NFL", "Owner"):
         table.add_column(col)
-    for col in (f"Proj wk {league.short_weeks[0]}-{league.short_weeks[-1]}", "Now", "ROS", "Value"):
+    for col in (f"Proj wk {league.short_weeks[0]}-{league.short_weeks[-1]}", "Market", "Scoring", "Value"):
         table.add_column(col, justify="right")
-    lineup, _ = league.model.starters(league.me.players)
     for p in pool:
         table.add_row(f"{p.name} {tags(p)}", p.pos, p.nfl_team, p.owner.name if p.owner else "[dim]FA[/dim]",
-                      f"{p.short_pts:.1f}", f"{p.short_value:,.0f}", f"{p.long_value:,.0f}",
+                      f"{p.short_pts:.1f}", f"{p.market_value:,.0f}", f"x{p.scoring_factor:.2f}",
                       f"[bold]{p.value:,.0f}[/bold]")
     console.print(table)
 
@@ -246,6 +246,7 @@ def cmd_values(league, engine, cfg, args):
 def main(argv=None):
     parser = argparse.ArgumentParser(prog="trade_helper", description="Sleeper trade helper")
     parser.add_argument("--config", default=str(Path(__file__).resolve().parent.parent / "config.yaml"))
+    parser.add_argument("--league", help="league name from config.yaml (default: its `league` setting)")
     parser.add_argument("--refresh", action="store_true", help="ignore cached data")
     parser.add_argument("--force", action="store_true", help="run trade commands after the deadline")
     sub = parser.add_subparsers(dest="command", required=True)
@@ -270,7 +271,7 @@ def main(argv=None):
     p.add_argument("--limit", type=int, default=40)
 
     args = parser.parse_args(argv)
-    cfg = load_config(args.config)
+    cfg = load_config(args.config, args.league)
     with console.status("Loading league data..."):
         league = load_league(cfg, refresh=args.refresh)
     header(league)

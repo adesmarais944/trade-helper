@@ -1,22 +1,28 @@
 """Load the league from Sleeper and value every rostered skill player.
 
-Value model (all on the FantasyCalc scale, top player ~10000):
-  short_value  next N weeks of projected points under this league's scoring (nearer weeks
-               weigh more), as value over replacement, mapped onto the FantasyCalc value curve
-               by rank. Byes count as 0; this week's points are scaled by injury status.
-  long_value   FantasyCalc redraft value (rest-of-season market), or a CSV override; players
-               FantasyCalc doesn't list fall back to rest-of-season projections.
-  value        w * short + (1 - w) * long, with w = current_week / final_week.
+Value model (FantasyCalc scale, top player ~10000):
+  market_value    CSV override, else FantasyCalc redraft value (rest-of-season market, fetched
+                  for this league's team count, QB count and PPR). Players FantasyCalc doesn't
+                  list fall back to rest-of-season projections, capped below its lowest value.
+  scoring_factor  rest-of-season projected points under this league's scoring divided by the
+                  points under the scoring FantasyCalc assumes (4-pt passing TD, no TE premium).
+                  1.0 when the two match.
+  value           market_value * scoring_factor.
+Byes, injuries and short-term projections are shown as tags only; they don't change value.
 """
 import csv
 from dataclasses import dataclass, field
-from datetime import date, timedelta
 
 from .lineup import FLEX_ELIGIBLE, LineupModel
 from .sleeper import SKILL_POSITIONS, SleeperClient
 
-FLAG_RATIO = 1.35        # short/long gap that earns an upside (^) or win-now (!) flag
+FLAG_RATIO = 1.35        # projection/market gap that earns an upside (^) or win-now (!) flag
 FLAG_MIN_VALUE = 1500    # ignore flags on fringe players
+# Scoring FantasyCalc values assume, beyond the PPR setting they're fetched with.
+FC_SCORING = {"pass_td": 4, "bonus_rec_te": 0}
+FACTOR_LIMITS = (0.75, 1.35)    # cap on the scoring adjustment
+FACTOR_MIN_PTS = 20             # below this many projected ROS points, don't adjust
+FC_PPR = (0, 0.5, 1)            # PPR settings FantasyCalc offers
 UNAVAILABLE = {"IR", "Out", "PUP", "Sus", "NA", "Doubtful"}   # never claimed off waivers
 
 
@@ -29,10 +35,10 @@ class Player:
     injury: str = ""
     rookie: bool = False
     week_pts: float = 0.0       # this week's projection (used to pick waiver claims)
-    short_pts: float = 0.0
-    ros_pts: float = 0.0
-    short_value: float = 0.0
-    long_value: float = 0.0
+    short_pts: float = 0.0      # next short_term_weeks of projections (display and flags)
+    proj_value: float = 0.0     # short_pts as value over replacement on the market curve (flags only)
+    market_value: float = 0.0
+    scoring_factor: float = 1.0
     value: float = 0.0
     byes: list = field(default_factory=list)
     star: bool = False
@@ -40,11 +46,11 @@ class Player:
 
     @property
     def upside(self):
-        return self.long_value >= FLAG_MIN_VALUE and self.long_value >= FLAG_RATIO * self.short_value
+        return self.value >= FLAG_MIN_VALUE and self.value >= FLAG_RATIO * self.proj_value
 
     @property
     def win_now(self):
-        return self.short_value >= FLAG_MIN_VALUE and self.short_value >= FLAG_RATIO * self.long_value
+        return self.proj_value >= FLAG_MIN_VALUE and self.proj_value >= FLAG_RATIO * self.value
 
     def __hash__(self):
         return hash(self.pid)
@@ -77,7 +83,6 @@ class League:
     week: int
     final_week: int
     trade_deadline: int
-    short_weight: float
     short_weeks: list
     model: LineupModel
     teams: list
@@ -86,7 +91,8 @@ class League:
     waiver_pool: list      # free agents a team would claim into an open roster spot
     depth_targets: dict    # players per position a team typically rosters
     num_teams: int
-    scoring_rec: float
+    fc_ppr: float
+    scoring_changes: dict  # setting -> (this league, FantasyCalc's assumption) where they differ
 
     @property
     def deadline_passed(self):
@@ -105,26 +111,21 @@ class League:
 
 
 def _points(stats, scoring):
-    """Score projected stats with the league's settings; fall back to Sleeper's half-PPR total."""
+    """Score projected stats with the given settings; fall back to Sleeper's own total."""
     hits = [stats[k] * v for k, v in scoring.items() if k in stats and v]
     if hits:
         return sum(hits)
-    return stats.get("pts_half_ppr", 0.0)
+    rec = scoring.get("rec", 0)
+    return stats.get("pts_ppr" if rec >= 1 else "pts_half_ppr" if rec > 0 else "pts_std", 0.0)
 
 
-def _status_factor(status, game_date, factors, today=None):
-    """Share of this week's projection a player keeps given his injury status. Questionable
-    only counts once the final injury report is out, so a midweek rest day doesn't."""
-    if status not in factors:
+def _scoring_factor(league_pts, fc_pts):
+    """How much more (or less) a player scores under this league's rules than under
+    FantasyCalc's, capped so a thin projection can't swing his value wildly."""
+    if fc_pts < FACTOR_MIN_PTS or league_pts <= 0:
         return 1.0
-    if status == "Questionable":
-        if not game_date:
-            return 1.0
-        game = date.fromisoformat(game_date)
-        lead = 1 if game.weekday() == 3 else 2   # Thursday games' final report is Wednesday
-        if (today or date.today()) < game - timedelta(days=lead):
-            return 1.0
-    return factors[status]
+    lo, hi = FACTOR_LIMITS
+    return min(max(league_pts / fc_pts, lo), hi)
 
 
 def _replacement_levels(points, pos_of, roster_positions, num_teams):
@@ -170,22 +171,21 @@ def load_league(cfg, refresh=False):
     db = api.players()
 
     settings = league["settings"]
-    scoring = league["scoring_settings"]
+    scoring = {**league["scoring_settings"], **cfg["scoring"]}
     roster_positions = league["roster_positions"]
     num_teams = settings.get("num_teams") or len(rosters)
     season = league["season"]
     week = state["week"] if state.get("season_type") == "regular" else 0
     final_week = cfg["final_week"]
-    short_weight = min(max(week / final_week, 0.0), 1.0)
+    fc_ppr = min(FC_PPR, key=lambda x: abs(x - scoring.get("rec", 0)))
+    fc_scoring = {**scoring, **FC_SCORING, "rec": fc_ppr}
+    scoring_changes = {k: (scoring.get(k, 0), v) for k, v in fc_scoring.items() if scoring.get(k, 0) != v}
 
     # --- projections ---
     first_week = max(week, 1)
     ros_weeks = list(range(first_week, final_week + 1))
     short_weeks = ros_weeks[: cfg["short_term_weeks"]]
-    week_weights = cfg["short_term_week_weights"] or [1.0]
-    status_factors = cfg["status_factors"] or {}
-    # short_pts is plain projected points (shown in tables); short_score weighs nearer weeks more.
-    week_pts, short_pts, short_score, ros_pts, byes = {}, {}, {}, {}, {}
+    week_pts, short_pts, ros_pts, ros_fc_pts, byes = {}, {}, {}, {}, {}
     all_teams = {p.get("team") for p in db.values() if p.get("team") and p.get("position") in SKILL_POSITIONS}
     for wk in ros_weeks:
         rows = api.projections(season, wk)
@@ -194,22 +194,20 @@ def load_league(cfg, refresh=False):
         for t in all_teams - playing:
             byes.setdefault(t, []).append(wk)
         for r in rows:
-            pid = r["player_id"]
-            pts = _points(r.get("stats") or {}, scoring)
+            pid, stats = r["player_id"], r.get("stats") or {}
+            pts = _points(stats, scoring)
             if wk == first_week:
-                pts *= _status_factor((db.get(pid) or {}).get("injury_status"), r.get("date"), status_factors)
                 week_pts[pid] = pts
             ros_pts[pid] = ros_pts.get(pid, 0.0) + pts
+            ros_fc_pts[pid] = ros_fc_pts.get(pid, 0.0) + _points(stats, fc_scoring)
             if wk in short_weeks:
-                i = short_weeks.index(wk)
                 short_pts[pid] = short_pts.get(pid, 0.0) + pts
-                short_score[pid] = short_score.get(pid, 0.0) + pts * week_weights[min(i, len(week_weights) - 1)]
 
     pos_of = {pid: p.get("position") for pid, p in db.items() if p.get("position") in SKILL_POSITIONS}
 
     # --- market values ---
     num_qbs = 2 if "SUPER_FLEX" in roster_positions else 1
-    fc = api.fantasycalc_values(num_teams, num_qbs, scoring.get("rec", 0))
+    fc = api.fantasycalc_values(num_teams, num_qbs, fc_ppr)
     fc_values = {str(row["player"]["sleeperId"]): float(row["value"])
                  for row in fc if row["player"].get("sleeperId")}
     curve = sorted(fc_values.values(), reverse=True)
@@ -219,7 +217,7 @@ def load_league(cfg, refresh=False):
         repl = _replacement_levels(pts, pos_of, roster_positions, num_teams)
         return {pid: v - repl[pos_of[pid]] for pid, v in pts.items() if v > 0}
 
-    short_values = _rank_to_curve(vor(short_score), curve)
+    proj_values = _rank_to_curve(vor(short_pts), curve)
     ros_values = _rank_to_curve(vor(ros_pts), curve)
     floor = curve[-1] if curve else 0.0
 
@@ -230,23 +228,21 @@ def load_league(cfg, refresh=False):
     overrides = _load_overrides(cfg["overrides_file"], name_index)
 
     players = {}
-    for pid in set(pos_of) & (set(fc_values) | set(short_values) | set(ros_values) | set(overrides)
+    for pid in set(pos_of) & (set(fc_values) | set(ros_values) | set(overrides)
                               | {x for r in rosters for x in (r.get("players") or [])}):
         p = db[pid]
-        if pid in overrides:
-            long_v = overrides[pid]
-        elif pid in fc_values:
-            long_v = fc_values[pid]
-        else:  # not on FantasyCalc's list: projections only, capped below the market's floor
-            long_v = min(ros_values.get(pid, 0.0), floor)
-        short_v = short_values.get(pid, 0.0)
+        if pid in overrides or pid in fc_values:
+            market = overrides.get(pid, fc_values.get(pid))
+            factor = _scoring_factor(ros_pts.get(pid, 0.0), ros_fc_pts.get(pid, 0.0))
+        else:  # not on FantasyCalc's list: projections (already league scoring), capped below its floor
+            market, factor = min(ros_values.get(pid, 0.0), floor), 1.0
         team = p.get("team") or "FA"
         players[pid] = Player(
             pid=pid, name=_name(p), pos=p["position"], nfl_team=team,
             injury=p.get("injury_status") or "", rookie=p.get("years_exp") == 0,
-            week_pts=week_pts.get(pid, 0.0), short_pts=short_pts.get(pid, 0.0), ros_pts=ros_pts.get(pid, 0.0),
-            short_value=short_v, long_value=long_v,
-            value=short_weight * short_v + (1 - short_weight) * long_v,
+            week_pts=week_pts.get(pid, 0.0), short_pts=short_pts.get(pid, 0.0),
+            proj_value=proj_values.get(pid, 0.0), market_value=market, scoring_factor=factor,
+            value=market * factor,
             byes=[w for w in byes.get(team, []) if w in short_weeks],
         )
     for p in sorted(players.values(), key=lambda p: p.value, reverse=True)[: cfg["star_count"]]:
@@ -301,9 +297,9 @@ def load_league(cfg, refresh=False):
 
     return League(
         name=league["name"], season=season, week=week, final_week=final_week,
-        trade_deadline=settings.get("trade_deadline") or 0, short_weight=short_weight,
-        short_weeks=short_weeks, model=model,
-        teams=teams, me=me, players=players, waiver_pool=waiver_pool, depth_targets=depth_targets, num_teams=num_teams, scoring_rec=scoring.get("rec", 0),
+        trade_deadline=settings.get("trade_deadline") or 0, short_weeks=short_weeks, model=model,
+        teams=teams, me=me, players=players, waiver_pool=waiver_pool, depth_targets=depth_targets,
+        num_teams=num_teams, fc_ppr=fc_ppr, scoring_changes=scoring_changes,
     )
 
 

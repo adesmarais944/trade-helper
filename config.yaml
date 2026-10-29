@@ -1,27 +1,42 @@
-# Sleeper league to analyze.
-league_id: "1389329636416061440"
-# Your Sleeper username or display name (used to find your roster).
-my_username: "adamDeez"
+# League used when you don't pass --league NAME.
+league: chuckle-nuts
 
-# --- Short-term vs long-term weighting ---
-# short-term weight = current_week / final_week (week 7 of 17 -> 41% now, 59% rest of season).
+# Your leagues. Any setting below (min_gain, trade_shapes, ...) can also go inside a league
+# to override it for that league only.
+leagues:
+  chuckle-nuts:
+    platform: sleeper
+    # The number in your Sleeper league URL.
+    league_id: "1389329636416061440"
+    # Your Sleeper username or display name (used to find your roster).
+    my_username: "adamDeez"
+    # Scoring, in Sleeper stat names. Sleeper leagues read this from the league itself
+    # (here: rec 0.5, pass_td 6); entries here replace individual settings.
+    # scoring: {pass_td: 6}
+
+  # Not supported yet: ESPN needs its own platform adapter. Its scoring must be given here.
+  # espn-league:
+  #   platform: espn
+  #   league_id: "..."
+  #   my_username: "..."
+  #   scoring: {rec: 1, pass_td: 4}
+
+# --- Values ---
+# Value = FantasyCalc rest-of-season value (or overrides.csv), times a scoring factor:
+# the player's projected points under the league's scoring / under FantasyCalc's
+# (4-pt passing TD, no TE premium). PPR is handled by fetching FantasyCalc at the league's
+# PPR (0, 0.5 or 1). Byes and injuries are shown as tags but don't change value.
+# Last week projected (for the scoring factor).
 final_week: 17
-# How many upcoming weeks count as "now" (projected points, byes included).
+# Upcoming weeks shown in the "Proj" column, bye tags and the ^ / ! flags.
 short_term_weeks: 3
-# Weight of each "now" week, nearest first, so a bye or injury this week costs more than
-# one in week 3. Weeks past the end of the list use the last weight.
-short_term_week_weights: [1.0, 0.7, 0.5]
-# This week's projection is multiplied by these for players with that injury status.
-# Questionable only counts once the final injury report is out (2 days before kickoff,
-# 1 day for Thursday games), so midweek rest days are ignored.
-status_factors: {Questionable: 0.85, Doubtful: 0.0, Out: 0.0}
 
 # --- Trade search ---
 # Max allowed gap between the two sides' package values (0.10 = 10%).
 fairness_tolerance: 0.10
 # Allowed trade shapes as "give-get" from your side ("2-1" = you give 2, get 1).
 trade_shapes: ["1-1", "1-2", "1-3", "2-1", "2-2", "2-3", "3-1", "3-2", "3-3"]
-# Players below this blended value are ignored as trade pieces.
+# Players below this value are ignored as trade pieces.
 min_trade_value: 500
 # Both teams must gain at least this much lineup value for a win-win suggestion.
 min_gain: 50
@@ -54,7 +69,8 @@ te_flex_factor: 0.7
 # Consolidation discount: best player in a package counts 100%, 2nd 80%, ...
 package_weights: [1.0, 0.80, 0.65, 0.50]
 
-# Manual rest-of-season value overrides (e.g. from peakedinhighskool's chart).
+# Manual rest-of-season value overrides (e.g. from peakedinhighskool's chart), on the
+# FantasyCalc scale with standard scoring; the scoring factor still applies.
 overrides_file: "overrides.csv"
 
 cache_dir: ".cache"

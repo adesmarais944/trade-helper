@@ -21,8 +21,10 @@ Set `COLUMNS=180` in the environment so tables don't wrap.
 
 ## Reading the output
 
-- **Value** blends "Now" (next few weeks of projections) and "ROS" (FantasyCalc
-  rest-of-season). The "now" weight is current week / 17, shown in the header.
+- **Value** is the FantasyCalc rest-of-season market value (or the user's override),
+  times a scoring factor for rules FantasyCalc doesn't assume (e.g. 6-pt passing TDs; the
+  header lists them). Byes and injuries are shown but don't change value.
+- The config can hold several leagues. Add `--league NAME` when the user names one.
 - **Your gain / Their gain**: change in each team's starting-lineup-plus-depth value.
 - **Value gap**: trade-chart difference; + means the user receives more.
 - **Type**: `partners`/`shop` only show win-win trades, ranked so both gains are as even
@@ -35,10 +37,11 @@ Set `COLUMNS=180` in the environment so tables don't wrap.
   can spare. Mention these, and note that a claim depends on waiver priority.
 - Depth is position-aware: a backup QB has value (this league rosters about 2), RB/WR depth
   matters most, and a 3rd TE is nearly worthless.
-- Values come from FantasyCalc (rest of season), Sleeper/RotoWire projections (next 3 weeks)
-  and the user's `overrides.csv`.
-- Tags: `*` star, `^` upside (ROS > current), `!` win-now (current > ROS), `R` rookie,
-  plus injury status and upcoming byes.
+- Values come from FantasyCalc (rest of season) and the user's `overrides.csv`, adjusted by
+  Sleeper/RotoWire projections scored with league rules.
+- Tags: `*` star, `^` value above the next 3 weeks' projections (buy-low candidate), `!`
+  projected above value (sell-high candidate), `R` rookie, plus injury status and upcoming
+  byes. Tags are labels only.
 
 ## Presenting results
 
