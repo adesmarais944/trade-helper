@@ -254,15 +254,16 @@ def main(argv=None):
     p = sub.add_parser("partners", help="best trade partners and trades for your team")
     p.add_argument("--teams", type=int, default=5, help="partners to show")
     p.add_argument("--top", type=int, help="trades per partner")
+    # Names may be quoted or not: `target Kyren Williams` works like `target "Kyren Williams"`.
     p = sub.add_parser("target", help="what it takes to get a player")
-    p.add_argument("player")
+    p.add_argument("player", nargs="+")
     p.add_argument("--top", type=int, default=8)
     p = sub.add_parser("shop", help="who wants one of your players")
-    p.add_argument("player")
+    p.add_argument("player", nargs="+")
     p.add_argument("--top", type=int, default=8)
     p = sub.add_parser("evaluate", help="grade a specific trade")
-    p.add_argument("--give", required=True, help='comma separated, e.g. "Player A, Player B"')
-    p.add_argument("--get", required=True)
+    p.add_argument("--give", required=True, nargs="+", help='comma separated, e.g. Player A, Player B')
+    p.add_argument("--get", required=True, nargs="+")
     sub.add_parser("report", help="positional strength of every team")
     p = sub.add_parser("values", help="player values")
     p.add_argument("--pos")
@@ -271,7 +272,10 @@ def main(argv=None):
     p.add_argument("--limit", type=int, default=40)
 
     args = parser.parse_args(argv)
-    cfg = load_config(args.config, args.league)
+    for name in ("player", "give", "get"):
+        if isinstance(getattr(args, name, None), list):
+            setattr(args, name, " ".join(getattr(args, name)))
+    cfg =load_config(args.config, args.league)
     with console.status("Loading league data..."):
         league = load_league(cfg, refresh=args.refresh)
     header(league)
