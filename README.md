@@ -1,6 +1,6 @@
-# Sleeper Trade Helper
+# Fantasy Trade Helper
 
-Suggests trades for your team in a Sleeper redraft league: who to target, what to offer, and
+Suggests trades for your team in a Sleeper or ESPN redraft league: who to target, what to offer, and
 whether a deal helps both lineups.
 
 ## Setup
@@ -46,11 +46,18 @@ pip install -r requirements.txt
 
 ### 4. Configure
 
-Edit `config.yaml`. Under `leagues:`, each league has a name and sets `platform` (only
-`sleeper` for now), `league_id` (the number in your Sleeper league URL) and `my_username`
-(your Sleeper username or display name). `league:` at the top picks the default; use
-`--league NAME` to pick another. Any other setting can go inside a league to override it
-there, including `scoring` (see below).
+Edit `config.yaml`. Under `leagues:`, each league has a name and a `platform`:
+
+- **Sleeper**: `league_id` (the number in your league URL) and `my_username` (your Sleeper
+  username or display name).
+- **ESPN**: `league_id` and `team_id`, both in your team page URL
+  (`...?leagueId=344304&teamId=12&seasonId=2026`). Private leagues also need your ESPN
+  login cookies: put `espn_s2` and `swid` in `secrets.yaml` (instructions inside). That file
+  is git-ignored; never commit or share it.
+
+`league:` at the top picks the default; use `--league NAME` to pick another. Any other
+setting can go inside a league to override it there, including `scoring` (see below) and
+`final_week`.
 
 ### 5. Run
 
@@ -74,7 +81,7 @@ python -m trade_helper report                   # every team's strength by posit
 python -m trade_helper values --mine            # player values (--pos RB, --team NAME)
 ```
 
-Global flags: `--league NAME`, `--refresh` (ignore cache), `--force` (run after the trade
+Global flags: `-l` / `--league NAME` (the config name, a prefix like `el`, or a platform like `espn`), `--refresh` (ignore cache), `--force` (run after the trade
 deadline), `--config PATH`.
 
 ## How values work
@@ -101,7 +108,7 @@ Where the numbers come from:
 - Players FantasyCalc doesn't list get a small value from their rest-of-season projections,
   capped below FantasyCalc's lowest value.
 
-Scoring comes from the Sleeper league automatically. To change a setting, add `scoring:`
+Scoring and roster slots come from the league automatically (Sleeper or ESPN). To change a setting, add `scoring:`
 to the league in `config.yaml`, using Sleeper stat names, e.g. `scoring: {rec: 1, pass_td: 4}`.
 
 Byes and injuries are shown next to each player but don't change value. After the league's
@@ -133,6 +140,9 @@ the roster has to balance out, and the **Roster moves** column shows how:
   trade. The column names the free agent who would help most there, as a hint.
 - The team that receives more players **cuts** whoever costs its roster the least (a
   surplus 3rd TE before a 5th RB). Cutting deep bench costs almost nothing.
+- **Position limits** (e.g. ESPN's max 5 RB / 5 WR) are read from the league. A team pushed
+  over one cuts its least valuable player at that position. Set `position_limits` in
+  `config.yaml` to override. Each cut shows its reason: "(RB limit 5)" or "(roster full)".
 
 IR players don't use active roster spots. Trades with a pointless throw-in (removing the
 player gives about the same result) are dropped, and near-duplicates (one player swapped)

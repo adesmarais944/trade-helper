@@ -71,7 +71,8 @@ def header(league):
         left = league.weeks_to_deadline
         status = ("[red]PASSED[/red]" if league.deadline_passed else
                   "[yellow]this week[/yellow]" if left == 0 else f"{left} week(s) away")
-        deadline = f"trade deadline week {league.trade_deadline}: {status}"
+        on = f" ({league.deadline_date:%b} {league.deadline_date.day})" if league.deadline_date else ""
+        deadline = f"trade deadline week {league.trade_deadline}{on}: {status}"
     else:
         deadline = "no trade deadline"
     adjust = ", ".join(f"{k} {mine:g} (FC {fc:g})" for k, (mine, fc) in league.scoring_changes.items())
@@ -86,7 +87,7 @@ def roster_moves(t):
     lines = []
     for who, cuts, open_spots, fa in (("You", t.my_cuts, t.my_open, t.my_fa),
                                       ("They", t.their_cuts, t.their_open, t.their_fa)):
-        lines += [f"{who} cut {p.name} [dim]{p.pos} {p.value:,.0f}[/dim]" for p in cuts]
+        lines += [f"{who} cut {p.name} [dim]{p.pos} {p.value:,.0f} ({why})[/dim]" for p, why in cuts]
         if open_spots:
             hint = f" [dim](best FA: {fa.name} {fa.pos})[/dim]" if fa else ""
             lines.append(f"{who}: {open_spots} open spot{'s' if open_spots > 1 else ''}{hint}")
@@ -261,7 +262,7 @@ def cmd_values(league, engine, cfg, args):
 def main(argv=None):
     parser = argparse.ArgumentParser(prog="trade_helper", description="Sleeper trade helper")
     parser.add_argument("--config", default=str(Path(__file__).resolve().parent.parent / "config.yaml"))
-    parser.add_argument("--league", help="league name from config.yaml (default: its `league` setting)")
+    parser.add_argument("-l", "--league", help="league from config.yaml: its name, a prefix, or a platform (espn, sleeper)")
     parser.add_argument("--refresh", action="store_true", help="ignore cached data")
     parser.add_argument("--force", action="store_true", help="run trade commands after the deadline")
     sub = parser.add_subparsers(dest="command", required=True)

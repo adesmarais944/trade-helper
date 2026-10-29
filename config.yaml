@@ -14,12 +14,15 @@ leagues:
     # (here: rec 0.5, pass_td 6); entries here replace individual settings.
     # scoring: {pass_td: 6}
 
-  # Not supported yet: ESPN needs its own platform adapter. Its scoring must be given here.
-  # espn-league:
-  #   platform: espn
-  #   league_id: "..."
-  #   my_username: "..."
-  #   scoring: {rec: 1, pass_td: 4}
+  el-diablo:
+    platform: espn
+    # From your ESPN team page URL: ...?leagueId=344304&teamId=12&seasonId=2026
+    league_id: "344304"
+    team_id: 12
+    # Private league: needs the espn_s2 / swid cookies in secrets.yaml.
+    # Scoring and roster slots are read from ESPN (here: rec 1, pass_td 4).
+    # ESPN's fantasy season ends week 16 here.
+    final_week: 16
 
 # --- Values ---
 # Value = FantasyCalc rest-of-season value (or overrides.csv), times a scoring factor:

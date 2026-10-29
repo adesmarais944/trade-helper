@@ -11,7 +11,7 @@ FLEX_ELIGIBLE = {
 
 class LineupModel:
     def __init__(self, roster_positions, bench_weights, waiver_pool=(), depth_targets=None,
-                 surplus_weight=0.05, te_flex_factor=1.0):
+                 surplus_weight=0.05, te_flex_factor=1.0, position_limits=None):
         self.dedicated = [p for p in roster_positions if p in SKILL_POSITIONS]
         self.flex = [FLEX_ELIGIBLE[p] for p in roster_positions if p in FLEX_ELIGIBLE]
         self.bench_weights = bench_weights
@@ -24,6 +24,8 @@ class LineupModel:
         self.surplus_weight = surplus_weight
         # A TE only takes a FLEX spot if value * te_flex_factor beats the best RB/WR option.
         self.te_flex_factor = te_flex_factor
+        # Max players per position on the whole roster, IR included (e.g. ESPN's RB 5).
+        self.position_limits = position_limits or {}
 
     def _flex_key(self, p, eligible):
         if p.pos == "TE" and eligible - {"TE"}:
@@ -69,20 +71,27 @@ class LineupModel:
     def settle(self, players, capacity, reserve=frozenset()):
         """Fit a roster to its active capacity, then score it.
 
+        Over a position limit: cut whichever player at that position costs the least score.
         Over capacity: cut whichever active player costs the least score (e.g. a surplus 3rd TE
         before a 5th RB). Under capacity: the spots stay open and add nothing. A free agent is
         there for the taking with or without a trade, so a trade doesn't get credit for one.
         Players whose pid is in `reserve` sit on IR and don't use an active spot.
-        Returns (score, cuts, open_spots, final_roster).
+        Returns (score, cuts, open_spots, final_roster); cuts are (player, reason) pairs.
         """
         roster = list(players)
-        open_spots = capacity - sum(1 for p in roster if p.pid not in reserve)
         cuts = []
+        for pos, limit in self.position_limits.items():
+            while sum(1 for p in roster if p.pos == pos) > limit:
+                at_pos = [p for p in roster if p.pos == pos]
+                cut = max(at_pos, key=lambda c: self.score([p for p in roster if p.pid != c.pid]))
+                roster = [p for p in roster if p.pid != cut.pid]
+                cuts.append((cut, f"{pos} limit {limit}"))
+        open_spots = capacity - sum(1 for p in roster if p.pid not in reserve)
         for _ in range(max(-open_spots, 0)):
             active = [p for p in roster if p.pid not in reserve]
             cut = max(active, key=lambda c: self.score([p for p in roster if p.pid != c.pid]))
             roster = [p for p in roster if p.pid != cut.pid]
-            cuts.append(cut)
+            cuts.append((cut, "roster full"))
         return self.score(roster), cuts, max(open_spots, 0), roster
 
     def best_claim(self, roster):

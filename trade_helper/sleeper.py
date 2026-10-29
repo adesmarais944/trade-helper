@@ -20,14 +20,14 @@ class Cache:
         self.session = requests.Session()
         self.session.headers["User-Agent"] = "trade-helper/1.0"
 
-    def get_json(self, url, ttl_hours, params=None, name=None):
+    def get_json(self, url, ttl_hours, params=None, name=None, cookies=None):
         key = name or hashlib.sha1((url + json.dumps(params, sort_keys=True)).encode()).hexdigest()[:16]
         path = self.root / f"{key}.json"
         fresh = path.exists() and time.time() - path.stat().st_mtime < ttl_hours * 3600
         if fresh and not self.refresh:
             return json.loads(path.read_text(encoding="utf-8"))
         try:
-            resp = self.session.get(url, params=params, timeout=30)
+            resp = self.session.get(url, params=params, cookies=cookies, timeout=30)
             resp.raise_for_status()
             data = resp.json()
         except (requests.RequestException, ValueError):

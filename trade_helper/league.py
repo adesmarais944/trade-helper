@@ -12,9 +12,11 @@ Byes, injuries and short-term projections are shown as tags only; they don't cha
 """
 import csv
 from dataclasses import dataclass, field
+from datetime import date
 
 from .lineup import FLEX_ELIGIBLE, LineupModel
 from .sleeper import SKILL_POSITIONS, SleeperClient
+from .sources import espn_source, sleeper_source
 
 FLAG_RATIO = 1.35        # projection/market gap that earns an upside (^) or win-now (!) flag
 FLAG_MIN_VALUE = 1500    # ignore flags on fringe players
@@ -62,7 +64,6 @@ class Player:
 @dataclass
 class Team:
     roster_id: int
-    owner_id: str
     name: str
     username: str
     wins: int
@@ -82,7 +83,8 @@ class League:
     season: str
     week: int
     final_week: int
-    trade_deadline: int
+    trade_deadline: int        # NFL week, 0 = none
+    deadline_date: date        # exact deadline when the platform gives one (ESPN), else None
     short_weeks: list
     model: LineupModel
     teams: list
@@ -96,6 +98,8 @@ class League:
 
     @property
     def deadline_passed(self):
+        if self.deadline_date:
+            return date.today() > self.deadline_date
         return bool(self.trade_deadline) and self.week > self.trade_deadline
 
     @property
@@ -166,16 +170,19 @@ def _load_overrides(path, name_index):
 
 
 def load_league(cfg, refresh=False):
+    # Sleeper supplies the NFL calendar, player database and projections for every platform.
     api = SleeperClient(cfg, refresh=refresh)
-    league, users, rosters, state = api.league(), api.users(), api.rosters(), api.state()
-    db = api.players()
-
-    settings = league["settings"]
-    scoring = {**league["scoring_settings"], **cfg["scoring"]}
-    roster_positions = league["roster_positions"]
-    num_teams = settings.get("num_teams") or len(rosters)
-    season = league["season"]
+    state, db = api.state(), api.players()
     week = state["week"] if state.get("season_type") == "regular" else 0
+    if cfg["platform"] == "espn":
+        src = espn_source(api, cfg, week, db)
+    else:
+        src = sleeper_source(api, cfg, week)
+
+    scoring = {**src.scoring, **cfg["scoring"]}
+    roster_positions = src.roster_positions
+    num_teams = len(src.rosters)
+    season = src.season
     final_week = cfg["final_week"]
     fc_ppr = min(FC_PPR, key=lambda x: abs(x - scoring.get("rec", 0)))
     fc_scoring = {**scoring, **FC_SCORING, "rec": fc_ppr}
@@ -229,7 +236,7 @@ def load_league(cfg, refresh=False):
 
     players = {}
     for pid in set(pos_of) & (set(fc_values) | set(ros_values) | set(overrides)
-                              | {x for r in rosters for x in (r.get("players") or [])}):
+                              | {x for r in src.rosters for x in r["players"]}):
         p = db[pid]
         if pid in overrides or pid in fc_values:
             market = overrides.get(pid, fc_values.get(pid))
@@ -249,33 +256,22 @@ def load_league(cfg, refresh=False):
         p.star = True
 
     # --- teams ---
-    user_by_id = {u["user_id"]: u for u in users}
-    ir_slots = settings.get("reserve_slots") or 0
     teams = []
-    for r in rosters:
-        user = user_by_id.get(r.get("owner_id"), {})
-        roster_ids = r.get("players") or []
-        reserve = set(r.get("reserve") or [])
-        skill = [players[pid] for pid in roster_ids if pid in players]
+    for r in src.rosters:
+        reserve = r["reserve"]
+        skill = [players[pid] for pid in r["players"] if pid in players]
         # K/DEF and other non-skill players still take active roster spots.
-        other_active = [pid for pid in roster_ids if pid not in players and pid not in reserve]
+        other_active = [pid for pid in r["players"] if pid not in players and pid not in reserve]
         team = Team(
-            roster_id=r["roster_id"], owner_id=r.get("owner_id"),
-            name=(user.get("metadata") or {}).get("team_name") or user.get("display_name") or f"Team {r['roster_id']}",
-            username=user.get("display_name", ""),
-            wins=r["settings"].get("wins", 0), losses=r["settings"].get("losses", 0),
+            roster_id=r["roster_id"], name=r["name"], username=r["username"],
+            wins=r["wins"], losses=r["losses"],
             players=skill, capacity=len(roster_positions) - len(other_active),
-            reserve=reserve & {p.pid for p in skill}, ir_slots=ir_slots,
+            reserve=reserve & {p.pid for p in skill}, ir_slots=src.ir_slots,
         )
         for p in skill:
             p.owner = team
         teams.append(team)
-
-    wanted = cfg["my_username"].lower()
-    me = next((t for t in teams if t.username.lower() == wanted
-               or (user_by_id.get(t.owner_id, {}).get("username") or "").lower() == wanted), None)
-    if me is None:
-        raise SystemExit(f"No team owned by {cfg['my_username']!r}. Owners: {', '.join(t.username for t in teams)}")
+    me = next(t for t in teams if t.roster_id == src.my_roster_id)
 
     # Waiver pool: top free agents per position by this week's projection. A team claiming
     # into an open spot picks whichever of these helps its lineup most.
@@ -292,12 +288,15 @@ def load_league(cfg, refresh=False):
         avg = sum(1 for t in teams for p in t.players if p.pos == pos) / max(len(teams), 1)
         depth_targets[pos] = max(round(avg), roster_positions.count(pos))
     depth_targets.update(cfg["depth_targets"] or {})
+    position_limits = {**src.position_limits, **(cfg["position_limits"] or {})}
+    for pos, limit in position_limits.items():
+        depth_targets[pos] = min(depth_targets.get(pos, limit), limit)
     model = LineupModel(roster_positions, cfg["bench_weights"], waiver_pool, depth_targets,
-                        cfg["surplus_weight"], cfg["te_flex_factor"])
+                        cfg["surplus_weight"], cfg["te_flex_factor"], position_limits)
 
     return League(
-        name=league["name"], season=season, week=week, final_week=final_week,
-        trade_deadline=settings.get("trade_deadline") or 0, short_weeks=short_weeks, model=model,
+        name=src.name, season=season, week=week, final_week=final_week,
+        trade_deadline=src.trade_deadline, deadline_date=src.deadline_date, short_weeks=short_weeks, model=model,
         teams=teams, me=me, players=players, waiver_pool=waiver_pool, depth_targets=depth_targets,
         num_teams=num_teams, fc_ppr=fc_ppr, scoring_changes=scoring_changes,
     )

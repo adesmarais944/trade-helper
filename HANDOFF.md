@@ -17,7 +17,7 @@ suggests trades. Offers are made by hand in the Sleeper app.
 | League type | **Redraft**, half PPR. No dynasty, keeper or contend/rebuild logic. |
 | Language / output | Python, terminal output (`rich` tables). |
 | Interface | Python CLI is the core. A thin Claude skill wraps it. |
-| Scope | Several leagues (2026-10-28): config has a `leagues:` map, `league:` picks the default, `--league NAME` overrides. Only `platform: sleeper` works; the user plans an ESPN league (full PPR, 4-pt passing TD) later. |
+| Scope | Several leagues (2026-10-28): config has a `leagues:` map, `league:` picks the default, `--league NAME` overrides. Platforms: `sleeper` (`my_username`) and `espn` (`team_id`; cookies in git-ignored `secrets.yaml`). |
 | Value model (2026-10-28, replaces the now/ROS blend) | **Value = FantasyCalc ROS value (or override) × per-player scoring factor.** The old blend (`w = week/17` of a 3-week projection value) over-penalized byes (Nico Collins −31% for one bye) and made values hard to explain. FC is real trade-market data, which also fits the assumption that opponents value players the way the tool does. |
 | Scoring formats | PPR: fetch FC at the league's PPR (0/0.5/1). Everything else (6-pt pass TD, TE premium): per-player factor = ROS projected points under league scoring / under FC's assumed scoring, capped 0.75–1.35. Per player, not per position, so pocket passers gain more than rushing QBs. |
 | Trade deadline | After the deadline the tool is useless, so trade commands refuse to run (`--force` overrides). |
@@ -42,6 +42,15 @@ suggests trades. Offers are made by hand in the Sleeper app.
 - `settings.trade_deadline` = 11 (Sleeper week number). The user remembered it as about Nov 11.
 - Playoffs start week 15. `final_week` is set to 17 in the config.
 
+**ESPN league** (config name `el-diablo`, added 2026-10-28):
+- "El Diablo Thickburger Combo", leagueId `344304`, user's teamId `12` ("Scoot Daddy", 2-5
+  in week 8), 12 teams, season 2026. Private: needs `espn_s2`/`swid` cookies in `secrets.yaml`.
+- Lineup: QB, RB, RB, WR, WR, TE, FLEX, D/ST, K, 7 bench, no IR slot.
+- Position limits: QB 4, RB 5, WR 5, TE 3, K 3, D/ST 3. Most teams sit at 5 RB / 5 WR, so
+  trades that add one there force a cut.
+- Scoring: full PPR (`rec` 1), `pass_td` 4, INT −2, so every scoring factor is ×1.00.
+- Trade deadline 2026-12-02 (week 13). ESPN's final scoring period is 16 (`final_week: 16`).
+
 ## Data sources
 
 | Source | Endpoint | Use | Notes |
@@ -49,6 +58,7 @@ suggests trades. Offers are made by hand in the Sleeper app.
 | Sleeper | `api.sleeper.app/v1/league/{id}`, `/users`, `/rosters`, `/state/nfl` | League, rosters, current week | No auth needed. Cached 15 min. |
 | Sleeper | `api.sleeper.app/v1/players/nfl` | Player database (~5 MB) | Sleeper asks for at most 1 fetch/day. Cached 24 h. |
 | Sleeper (undocumented) | `api.sleeper.app/projections/nfl/{season}/{week}?season_type=regular&position[]=QB...` | Weekly stat projections | Bye-week teams still get rows, but with `opponent: None` (fixed 2026-10-28; the old "team has no rows" check found no byes at all). OUT players project 0 for the current week, IR players 0 for every week. Each row's `date` is the game date. Scored with league scoring (and with FC's assumed scoring, for the factor); falls back to `pts_std`/`pts_half_ppr`/`pts_ppr` by PPR. League-independent, so usable for ESPN leagues too. |
+| ESPN | `lm-api-reads.fantasy.espn.com/apis/v3/games/ffl/seasons/{season}/segments/0/leagues/{id}?view=mSettings&view=mTeam&view=mRoster` | ESPN league settings, scoring, rosters, records | Private leagues return 401 without the `espn_s2` + `SWID` cookies. Cached 15 min as `espn_{id}_{season}.json`. Stat ids, slot ids and position ids are mapped in `sources.py`. Trade deadline is `tradeSettings.deadlineDate` (epoch ms). |
 | FantasyCalc | `api.fantasycalc.com/values/current?isDynasty=false&numQbs=1&numTeams=12&ppr=0.5` | Rest-of-season market value | Keyed by `sleeperId`. About 196 players. `ppr` accepts 0, 0.5, 1; values barely change between them for most players. |
 | peakedinhighskool | Website chart | Not used automatically | The chart is **images**, so it can't be parsed. The user can type values into `overrides.csv` by hand. |
 
@@ -61,13 +71,16 @@ players as of 2026-10-28).
 ## Architecture
 
 ```
-config.yaml            leagues (platform, id, username, scoring) + global settings
+config.yaml            leagues (platform, id, username/team_id, scoring) + global settings
+secrets.yaml           git-ignored: ESPN espn_s2 / swid cookies
 overrides.csv          optional manual ROS values: player,value
 trade_helper/
   config.py            loads YAML + defaults, merges globals with the chosen league's entry
-                       (an old single-league file still works); resolves relative paths
+                       (an old single-league file still works); loads secrets; resolves paths
   sleeper.py           Cache (JSON on disk in .cache/, stale fallback if offline) + SleeperClient
-  league.py            load_league(): fetch, value players, build Team/Player/League objects
+  sources.py           sleeper_source / espn_source: each platform -> LeagueData (Sleeper ids,
+                       Sleeper stat and slot names); ESPN -> Sleeper player id matching
+  league.py            load_league(): pick source, value players, build Team/Player/League
   lineup.py            LineupModel: best legal lineup + position-aware depth, cuts, free-agent hint
   engine.py            TradeEngine: package enumeration, fairness, gains, classify, partners
   cli.py               argparse commands + rich output
@@ -77,11 +90,16 @@ trade_helper/
 Run with `python -m trade_helper <command>`. Commands: `partners`, `target`, `shop`, `evaluate`,
 `report`, `values`. Global flags: `--league`, `--refresh`, `--force`, `--config`. Python 3.13 on Windows.
 
-**Adding a platform (ESPN):** `load_league()` reads Sleeper directly. An ESPN adapter needs to
-supply rosters, users, roster positions, current week, trade deadline and a scoring dict in
-Sleeper stat names (config `scoring` is merged on top). FantasyCalc and Sleeper projections
-are keyed by Sleeper player id, so ESPN players must be mapped to Sleeper ids (by name +
-position + team). Then add the platform to `config.PLATFORMS`.
+**Platforms:** Sleeper always supplies the NFL week, player database and projections. A
+platform source (`sources.py`) returns `LeagueData`: name, season, scoring (Sleeper stat
+names; config `scoring` merged on top), roster slots (Sleeper names, IR excluded), IR slot
+count, trade deadline (week, plus an exact date for ESPN), rosters with Sleeper player ids,
+and the user's roster id. ESPN players map to Sleeper ids by Sleeper's `espn_id` when present
+(missing for ~75% of players), else by normalized name (lowercase, no punctuation or
+Jr/Sr/II/III) + position: 157/157 matched in testing. Unmatched skill players print a warning
+and only take a roster spot. ESPN's deadline week = current week + whole weeks until the
+date; `deadline_passed` uses the exact date. To add a platform: write a source, add it to
+`config.PLATFORMS` and `load_league()`.
 Dependencies are in `requirements.txt` and already installed.
 
 ## Value model (`league.py`)
@@ -124,7 +142,12 @@ K and DEF are excluded from valuation and trades. They still take roster spots.
 - **Roster settling** (`LineupModel.settle`): active capacity = lineup slots
   (`len(roster_positions)`) minus K/DEF. IR players (`roster.reserve`) don't count. An
   incoming IR player stays on IR if the receiver has a free IR slot.
+  - Position limits first (`LineupModel.position_limits`, whole roster incl. IR): while over a
+    limit, cut the player at that position whose removal costs the least score. Limits come
+    from ESPN `rosterSettings.positionLimits` (0 = none) or Sleeper `position_limit_<pos>`
+    settings, with config `position_limits` on top; depth targets are capped at the limit.
   - Over capacity: repeatedly cut the active player whose removal costs the least score.
+  - Cuts are `(player, reason)` pairs; the CLI prints the reason ("RB limit 5", "roster full").
   - Under capacity: the spots stay open and score 0 (since 2026-10-28, see User decisions).
     `Trade.my_open`/`their_open` count open spots the trade creates beyond the baseline.
     `LineupModel.best_claim()` names a hint (`my_fa`/`their_fa`): from the `waiver_pool`
@@ -244,7 +267,10 @@ replacement and the top-12 stars didn't move.
 - **Scoring factor:** treats value as proportional to points, though value really tracks
   points over replacement. Only `pass_td` and `bonus_rec_te` are assumed to differ from FC;
   other unusual settings (e.g. −2 per interception) are treated as matching FC.
-- **Platforms:** only Sleeper. ESPN is a config placeholder (see Architecture).
+- **ESPN:** only the main offensive stats are mapped (yards, TDs, receptions, INT, fumbles
+  lost, 2-pt); yardage or long-TD bonuses are ignored. A TE-premium override on receptions
+  becomes `bonus_rec_te`. Cookies expire (about a year); a 401 means refresh them. If ESPN is
+  unreachable, the stale cache is used silently.
 - **Lineup rules:** IR placement follows Sleeper's current `reserve` list. There's no check
   that an incoming injured player is actually IR-eligible.
 - **Open spots:** worth 0, which slightly undervalues the side that receives fewer players
@@ -261,7 +287,6 @@ replacement and the top-12 stars didn't move.
 ## Possible next steps (none requested yet)
 
 - This-week lineup impact warning in `evaluate` and suggestions (discussed, deferred).
-- ESPN platform adapter (user has an ESPN league: full PPR, 4-pt passing TD).
 - Weight playoff schedule (weeks 15–17) more heavily as the season goes on.
 - Add more value sources, such as another public rest-of-season ranking, averaged with
   FantasyCalc.

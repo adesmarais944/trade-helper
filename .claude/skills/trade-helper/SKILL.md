@@ -1,9 +1,9 @@
 ---
 name: trade-helper
-description: Find and evaluate fantasy football trades for the user's Sleeper league. Use when the user asks for trade ideas, trade partners, what it would take to get a player, who wants one of their players, whether a trade is good, or how teams in their league stack up.
+description: Find and evaluate fantasy football trades for the user's Sleeper or ESPN leagues. Use when the user asks for trade ideas, trade partners, what it would take to get a player, who wants one of their players, whether a trade is good, or how teams in their league stack up.
 ---
 
-# Sleeper trade helper
+# Fantasy trade helper
 
 The project root contains a Python CLI that does all the analysis. Run it from the project
 root and base your answer on its output. Don't invent player values.
@@ -24,7 +24,10 @@ Set `COLUMNS=180` in the environment so tables don't wrap.
 - **Value** is the FantasyCalc rest-of-season market value (or the user's override),
   times a scoring factor for rules FantasyCalc doesn't assume (e.g. 6-pt passing TDs; the
   header lists them). Byes and injuries are shown but don't change value.
-- The config can hold several leagues. Add `--league NAME` when the user names one.
+- The config can hold several leagues: `chuckle-nuts` (Sleeper, default) and `el-diablo`
+  (ESPN). Add `-l espn` or `-l sleeper` when the user names one (e.g. "my ESPN league").
+- An ESPN "401" error means the cookies in `secrets.yaml` expired; ask the user to refresh
+  them. Never read secrets.yaml aloud or print its values.
 - **Your gain / Their gain**: change in each team's starting-lineup-plus-depth value.
 - **Value gap**: trade-chart difference; + means the user receives more.
 - **Type**: `partners`/`shop` only show win-win trades, ranked so both gains are as even
