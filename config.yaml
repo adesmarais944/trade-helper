@@ -1,0 +1,65 @@
+# Sleeper league to analyze.
+league_id: "1389329636416061440"
+# Your Sleeper username or display name (used to find your roster).
+my_username: "adamDeez"
+
+# --- Short-term vs long-term weighting ---
+# short-term weight = current_week / final_week (week 7 of 17 -> 41% now, 59% rest of season).
+final_week: 17
+# How many upcoming weeks count as "now" (projected points, byes included).
+short_term_weeks: 3
+# Weight of each "now" week, nearest first, so a bye or injury this week costs more than
+# one in week 3. Weeks past the end of the list use the last weight.
+short_term_week_weights: [1.0, 0.7, 0.5]
+# This week's projection is multiplied by these for players with that injury status.
+# Questionable only counts once the final injury report is out (2 days before kickoff,
+# 1 day for Thursday games), so midweek rest days are ignored.
+status_factors: {Questionable: 0.85, Doubtful: 0.0, Out: 0.0}
+
+# --- Trade search ---
+# Max allowed gap between the two sides' package values (0.10 = 10%).
+fairness_tolerance: 0.10
+# Allowed trade shapes as "give-get" from your side ("2-1" = you give 2, get 1).
+trade_shapes: ["1-1", "1-2", "1-3", "2-1", "2-2", "2-3", "3-1", "3-2", "3-3"]
+# Players below this blended value are ignored as trade pieces.
+min_trade_value: 500
+# Both teams must gain at least this much lineup value for a win-win suggestion.
+min_gain: 50
+# Labels in target/evaluate: a "fair" trade may cost the partner up to this much.
+max_partner_loss: 150
+# Trades rank by the SMALLER of the two lineup gains, so balanced deals come first.
+# Each side that fills a weak starting spot boosts that by this much (0.25 = +25%).
+need_bonus: 0.25
+# Trades shown per partner in `partners`.
+trades_per_partner: 3
+# Top-N players by value get a * (elite / hard to pry loose).
+star_count: 12
+
+# Uneven trades: the side with fewer players claims free agents into open roster spots
+# (chosen from the top N per position by this week's projection, by roster need); the side
+# with more players cuts its lowest-value players.
+waiver_candidates: 5
+
+# --- Positional depth ---
+# Bench players count per position: the 1st backup at a position earns 30% of his value,
+# the 2nd 20%, ... while the position is under its depth target. Players beyond the target
+# earn surplus_weight (a 3rd TE is worth far less than a 3rd RB).
+bench_weights: [0.30, 0.20, 0.15, 0.10]
+surplus_weight: 0.05
+# Players per position a team keeps (starters + backups). Default: this league's average
+# roster (currently QB 2, RB 5, WR 5, TE 2). Uncomment to override:
+# depth_targets: {QB: 2, RB: 5, WR: 5, TE: 2}
+# A TE only plays FLEX if his value x this beats the best RB/WR option (1.0 = no penalty).
+te_flex_factor: 0.7
+# Consolidation discount: best player in a package counts 100%, 2nd 80%, ...
+package_weights: [1.0, 0.80, 0.65, 0.50]
+
+# Manual rest-of-season value overrides (e.g. from peakedinhighskool's chart).
+overrides_file: "overrides.csv"
+
+cache_dir: ".cache"
+cache_ttl_hours:
+  players: 24      # Sleeper asks for at most one players fetch per day
+  values: 6
+  projections: 6
+  league: 0.25

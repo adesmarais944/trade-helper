@@ -1,0 +1,5 @@
+# Optional rest-of-season value overrides. One row per player.
+# player = Sleeper name (e.g. "Jahmyr Gibbs") or Sleeper player id.
+# value  = rest-of-season value on the FantasyCalc scale (top players ~10000).
+# Lines starting with # are ignored.
+player,value
